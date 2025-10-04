@@ -1,0 +1,47 @@
+.dark-theme {
+    background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 100%);
+    color: white;
+    min-height: 100vh;
+}
+
+.glass-card {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 15px;
+}
+
+.dark-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid #444;
+    color: white;
+}
+
+.dark-input:focus {
+    background: rgba(0, 0, 0, 0.5);
+    border-color: #0d6efd;
+    color: white;
+}
+
+.glowing-text {
+    color: #fff;
+    text-shadow: 0 0 10px #0d6efd;
+}
+
+.logs {
+    background: #000;
+    color: #0f0;
+    padding: 15px;
+    border-radius: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.user-card {
+    background: rgba(255,255,255,0.05);
+    padding: 15px;
+    border-radius: 10px;
+    border-left: 4px solid #0d6efd;
+}
