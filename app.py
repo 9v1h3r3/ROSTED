@@ -379,70 +379,7 @@ def view_tokens():
         
         tokens_html += f'''
         <div class="token-item">
-            <div>
-                <strong>Token #{token_id}</strong> - {status}<br>
-                <small>{short_token}</small><br>
-                <small>Created: {created_at} | Used: {use_count} times</small>
-                {f'<br><small>Last used: {last_used}</small>' if last_used else ''}
-            </div>
-            <div>
-                <button class="copy-btn" onclick="copyToken('{token_text}')">📋 Copy</button>
-            </div>
-        </div>
-        '''
-    
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Saved Tokens</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
-            .token-list {{ max-height: 500px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin: 10px 0; }}
-            .token-item {{ background: #f8f9fa; padding: 10px; margin: 8px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }}
-            .copy-btn {{ background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }}
-            .copy-btn:hover {{ background: #218838; }}
-            .back-btn {{ background: #007bff; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📋 Saved Tokens ({len(tokens)})</h1>
-            <a href="/admin/panel" class="back-btn">← Back to Admin</a>
-            
-            <div class="token-list">
-                {tokens_html if tokens else '<p>No tokens saved yet.</p>'}
-            </div>
-            
-            <div style="margin-top: 15px;">
-                <button onclick="copyAllTokens()" class="copy-btn">📋 Copy All Active Tokens</button>
-            </div>
-        </div>
         
-        <script>
-            function copyToken(tokenText) {{
-                navigator.clipboard.writeText(tokenText).then(function() {{
-                    alert('Token copied to clipboard!');
-                }});
-            }}
-            
-            function copyAllTokens() {{
-                const activeTokens = Array.from(document.querySelectorAll('.token-item'))
-                    .map(item => {{
-                        const copyBtn = item.querySelector('.copy-btn');
-                        return copyBtn.getAttribute('onclick').match(/'([^']+)'/)[1];
-                    }});
-                
-                const allTokensText = activeTokens.join('\\n');
-                navigator.clipboard.writeText(allTokensText).then(function() {{
-                    alert('All active tokens copied to clipboard!');
-                }});
-            }}
-        </script>
-    </body>
-    </html>
-    '''
 
 # Admin routes
 @app.route('/admin')
