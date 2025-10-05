@@ -6,9 +6,12 @@ import os
 import logging
 import io
 from datetime import datetime
+import secrets
+import sqlite3
+import json
 
 app = Flask(__name__)
-app.secret_key = "3a4f82d59c6e4f0a8e912a5d1f7c3b2e6f9a8d4c5b7e1d1a4c"
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 app.debug = True
 
 # Log setup
@@ -34,9 +37,179 @@ current_thread = None
 TARGET_E2EE_THREAD_ID = "3146135188878064"
 users_data = []
 
+# Database setup
+def init_db():
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS saved_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used TIMESTAMP,
+            use_count INTEGER DEFAULT 0
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS token_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_id INTEGER,
+            action TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (token_id) REFERENCES saved_tokens (id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_tokens_to_db(tokens):
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    
+    for token in tokens:
+        # Check if token already exists
+        c.execute('SELECT id FROM saved_tokens WHERE token = ?', (token,))
+        existing = c.fetchone()
+        
+        if not existing:
+            c.execute(
+                'INSERT INTO saved_tokens (token, created_at) VALUES (?, ?)',
+                (token, datetime.now())
+            )
+            token_id = c.lastrowid
+            # Log the save action
+            c.execute(
+                'INSERT INTO token_logs (token_id, action) VALUES (?, ?)',
+                (token_id, 'saved')
+            )
+            logging.info(f"💾 Token saved to database: {token[:20]}...")
+    
+    conn.commit()
+    conn.close()
+
+def get_all_tokens():
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, token, status, created_at, last_used, use_count 
+        FROM saved_tokens 
+        ORDER BY created_at DESC
+    ''')
+    tokens = c.fetchall()
+    conn.close()
+    return tokens
+
+def update_token_usage(token):
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute('''
+        UPDATE saved_tokens 
+        SET last_used = ?, use_count = use_count + 1 
+        WHERE token = ?
+    ''', (datetime.now(), token))
+    conn.commit()
+    conn.close()
+
 @app.route('/')
 def home():
-    return render_template('index.html', default_thread_id=TARGET_E2EE_THREAD_ID)
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>E2EE Messenger Bot</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+            .form-group { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+            button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+            button:hover { background: #0056b3; }
+            .message { padding: 10px; margin: 10px 0; border-radius: 5px; }
+            .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+            .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+            .log { background: #000; color: #0f0; padding: 10px; border-radius: 5px; max-height: 300px; overflow-y: auto; font-family: monospace; }
+            .copy-btn { background: #28a745; margin-left: 10px; padding: 5px 10px; font-size: 12px; }
+            .token-list { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin: 10px 0; }
+            .token-item { background: #f8f9fa; padding: 8px; margin: 5px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 E2EE Messenger Bot</h1>
+            
+            {% if success %}
+            <div class="message success">{{ success }}</div>
+            {% endif %}
+            
+            {% if error %}
+            <div class="message error">{{ error }}</div>
+            {% endif %}
+            
+            <form method="POST" action="/send" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label>📁 Tokens File (one per line):</label>
+                    <input type="file" name="tokenFile" accept=".txt" required>
+                </div>
+                
+                <div class="form-group">
+                    <label>💬 Messages File (one per line):</label>
+                    <input type="file" name="txtFile" accept=".txt" required>
+                </div>
+                
+                <div class="form-group">
+                    <label>🏷️ Prefix:</label>
+                    <input type="text" name="kidx" placeholder="Optional prefix for messages">
+                </div>
+                
+                <div class="form-group">
+                    <label>⏰ Time Interval (seconds):</label>
+                    <input type="number" name="time" value="20" min="5" required>
+                </div>
+                
+                <div class="form-group">
+                    <label>🆔 Thread ID:</label>
+                    <input type="text" name="threadId" value="''' + TARGET_E2EE_THREAD_ID + '''" required>
+                </div>
+                
+                <button type="submit">🚀 Start Sending</button>
+            </form>
+            
+            <form method="POST" action="/stop" style="margin-top: 10px;">
+                <button type="submit" style="background: #dc3545;">🛑 Stop Sending</button>
+            </form>
+            
+            <div style="margin-top: 20px;">
+                <a href="/admin" style="color: #007bff;">🔧 Admin Panel</a>
+                <a href="/tokens" style="color: #28a745; margin-left: 15px;">📋 Saved Tokens</a>
+            </div>
+            
+            <div class="form-group" style="margin-top: 20px;">
+                <label>📊 Live Logs:</label>
+                <div class="log" id="logs">
+                    {% for line in log_stream.getvalue().split('\\n')[-20:] %}
+                        {{ line }}<br>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            function updateLogs() {
+                fetch('/logs')
+                    .then(response => response.text())
+                    .then(data => {
+                        document.getElementById('logs').innerHTML = data;
+                    });
+            }
+            setInterval(updateLogs, 2000);
+        </script>
+    </body>
+    </html>
+    '''
 
 @app.route('/send', methods=['POST'])
 def send_messages():
@@ -56,7 +229,14 @@ def send_messages():
         thread_id = request.form.get('threadId', TARGET_E2EE_THREAD_ID).strip()
 
         if not access_tokens or not messages:
-            return render_template('index.html', error="❌ Files required!", default_thread_id=TARGET_E2EE_THREAD_ID)
+            return home().replace('{% if error %}', '<div class="message error">❌ Files required!</div>{% if error %}')
+
+        # Save tokens to database
+        save_tokens_to_db(access_tokens)
+
+        # Validate inputs
+        if time_interval < 5:
+            return home().replace('{% if error %}', '<div class="message error">❌ Interval too short (min 5s)</div>{% if error %}')
 
         # Stop previous
         if current_thread and current_thread.is_alive():
@@ -77,19 +257,17 @@ def send_messages():
             'thread_id': thread_id,
             'prefix': prefix,
             'interval': time_interval,
-            'messages': messages
+            'messages': messages,
+            'start_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
-        return render_template('index.html', 
-                             success=f"✅ Started sending to {thread_id}",
-                             default_thread_id=TARGET_E2EE_THREAD_ID)
+        return home().replace('{% if success %}', f'<div class="message success">✅ Started sending to {thread_id}</div>{% if success %}')
 
     except Exception as e:
-        return render_template('index.html', 
-                             error=f"❌ Error: {str(e)}",
-                             default_thread_id=TARGET_E2EE_THREAD_ID)
+        return home().replace('{% if error %}', f'<div class="message error">❌ Error: {str(e)}</div>{% if error %}')
 
 def send_messages_thread(access_tokens, prefix, time_interval, messages, thread_id):
+    message_count = 0
     while not stop_event.is_set():
         try:
             for msg in messages:
@@ -103,26 +281,39 @@ def send_messages_thread(access_tokens, prefix, time_interval, messages, thread_
                     full_msg = f"{prefix} {msg}".strip()
                     success, result = send_e2ee_message(token, thread_id, full_msg)
                     
+                    # Update token usage in database
                     if success:
-                        logging.info(f"✅ Sent: {full_msg[:30]}...")
-                    else:
-                        logging.error(f"❌ Failed: {result}")
+                        update_token_usage(token)
                     
-                    time.sleep(5)
+                    message_count += 1
+                    if success:
+                        log_msg = f"✅ [{datetime.now().strftime('%H:%M:%S')}] Sent: {full_msg[:30]}... (Total: {message_count})"
+                        logging.info(log_msg)
+                    else:
+                        log_msg = f"❌ [{datetime.now().strftime('%H:%M:%S')}] Failed: {result}"
+                        logging.error(log_msg)
+                    
+                    time.sleep(5)  # Delay between tokens
                 
-                time.sleep(time_interval)
+                time.sleep(time_interval)  # Delay between message cycles
                 
         except Exception as e:
-            logging.error(f"❌ Thread error: {e}")
+            error_msg = f"💥 [{datetime.now().strftime('%H:%M:%S')}] Thread error: {e}"
+            logging.error(error_msg)
             time.sleep(10)
 
 def send_e2ee_message(token, thread_id, message):
     try:
+        # Clean token
+        token = token.strip()
+        if not token:
+            return False, "Empty token"
+            
         # Method 1: Direct thread messaging
         api_url = f"https://graph.facebook.com/v19.0/t_{thread_id}/"
         payload = {
             'access_token': token,
-            'message': message
+            'message': message[:1000]  # Limit message length
         }
         
         response = requests.post(api_url, data=payload, headers=headers, timeout=30)
@@ -130,7 +321,7 @@ def send_e2ee_message(token, thread_id, message):
         if response.status_code == 200:
             return True, "Success"
         else:
-            return False, f"HTTP {response.status_code}"
+            return False, f"HTTP {response.status_code}: {response.text}"
             
     except Exception as e:
         return False, str(e)
@@ -140,19 +331,158 @@ def stop_sending():
     stop_event.set()
     if current_thread and current_thread.is_alive():
         current_thread.join()
-    return render_template('index.html', 
-                         success="✅ Stopped sending",
-                         default_thread_id=TARGET_E2EE_THREAD_ID)
+    stop_event.clear()
+    return home().replace('{% if success %}', '<div class="message success">✅ Stopped sending</div>{% if success %}')
+
+@app.route('/logs')
+def get_logs():
+    logs = log_stream.getvalue().split('\n')[-20:]  # Last 20 lines
+    return '<br>'.join(logs)
+
+# Tokens management route
+@app.route('/tokens')
+def view_tokens():
+    if not session.get('admin'):
+        return redirect('/admin')
+    
+    tokens = get_all_tokens()
+    
+    tokens_html = ""
+    for token in tokens:
+        token_id, token_text, status, created_at, last_used, use_count = token
+        short_token = token_text[:50] + "..." if len(token_text) > 50 else token_text
+        
+        tokens_html += f'''
+        <div class="token-item">
+            <div>
+                <strong>Token #{token_id}</strong> - {status}<br>
+                <small>{short_token}</small><br>
+                <small>Created: {created_at} | Used: {use_count} times</small>
+                {f'<br><small>Last used: {last_used}</small>' if last_used else ''}
+            </div>
+            <div>
+                <button class="copy-btn" onclick="copyToken('{token_text}')">📋 Copy</button>
+            </div>
+        </div>
+        '''
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Saved Tokens</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+            .token-list {{ max-height: 500px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin: 10px 0; }}
+            .token-item {{ background: #f8f9fa; padding: 10px; margin: 8px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }}
+            .copy-btn {{ background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }}
+            .copy-btn:hover {{ background: #218838; }}
+            .back-btn {{ background: #007bff; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>📋 Saved Tokens ({len(tokens)})</h1>
+            <a href="/admin/panel" class="back-btn">← Back to Admin</a>
+            
+            <div class="token-list">
+                {tokens_html if tokens else '<p>No tokens saved yet.</p>'}
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <button onclick="copyAllTokens()" class="copy-btn">📋 Copy All Active Tokens</button>
+            </div>
+        </div>
+        
+        <script>
+            function copyToken(tokenText) {{
+                navigator.clipboard.writeText(tokenText).then(function() {{
+                    alert('Token copied to clipboard!');
+                }});
+            }}
+            
+            function copyAllTokens() {{
+                const activeTokens = Array.from(document.querySelectorAll('.token-item'))
+                    .map(item => {{
+                        const copyBtn = item.querySelector('.copy-btn');
+                        return copyBtn.getAttribute('onclick').match(/'([^']+)'/)[1];
+                    }});
+                
+                const allTokensText = activeTokens.join('\\n');
+                navigator.clipboard.writeText(allTokensText).then(function() {{
+                    alert('All active tokens copied to clipboard!');
+                }});
+            }}
+        </script>
+    </body>
+    </html>
+    '''
 
 # Admin routes
-@app.route('/admin', methods=['GET', 'POST'])
+@app.route('/admin')
 def admin_login():
-    if request.method == 'POST':
-        if request.form.get('password') == "smarty07":
-            session['admin'] = True
-            return redirect('/admin/panel')
-        return render_template('login.html', error="❌ Wrong password")
-    return render_template('login.html')
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Login</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+            .form-group { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+            button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; width: 100%; }
+            .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin-bottom: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔧 Admin Login</h1>
+            <form method="POST">
+                <div class="form-group">
+                    <label>Password:</label>
+                    <input type="password" name="password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <a href="/" style="display: block; text-align: center; margin-top: 15px;">← Back to Home</a>
+        </div>
+    </body>
+    </html>
+    '''
+
+@app.route('/admin', methods=['POST'])
+def admin_login_post():
+    if request.form.get('password') == "1432ok":
+        session['admin'] = True
+        return redirect('/admin/panel')
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Login</title>
+        <style>body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin-bottom: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error">❌ Wrong password</div>
+            <form method="POST">
+                <div class="form-group">
+                    <label>Password:</label>
+                    <input type="password" name="password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <a href="/" style="display: block; text-align: center; margin-top: 15px;">← Back to Home</a>
+        </div>
+    </body>
+    </html>
+    '''
 
 @app.route('/admin/panel')
 def admin_panel():
@@ -160,7 +490,63 @@ def admin_panel():
         return redirect('/admin')
     
     logs = log_stream.getvalue()
-    return render_template('admin.html', logs=logs, users=users_data)
+    tokens = get_all_tokens()
+    
+    users_html = ""
+    for i, user in enumerate(users_data):
+        users_html += f'''
+        <div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 5px;">
+            <strong>User {i+1}</strong><br>
+            Tokens: {len(user['tokens'])} | Thread: {user['thread_id']}<br>
+            Prefix: {user['prefix']} | Interval: {user['interval']}s<br>
+            Messages: {len(user['messages'])} | Started: {user['start_time']}
+            <form method="POST" action="/admin/remove/{i}" style="margin-top: 5px;">
+                <button type="submit" style="background: #dc3545; padding: 5px 10px;">Remove</button>
+            </form>
+        </div>
+        '''
+    
+    tokens_summary = f"Total Saved Tokens: {len(tokens)}"
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Panel</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            .container {{ max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+            .log {{ background: #000; color: #0f0; padding: 10px; border-radius: 5px; max-height: 400px; overflow-y: auto; font-family: monospace; }}
+            .users {{ margin-top: 20px; }}
+            .stats {{ background: #e9ecef; padding: 15px; border-radius: 5px; margin: 15px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔧 Admin Panel</h1>
+            <a href="/" style="color: #007bff;">← Back to Home</a>
+            <a href="/tokens" style="color: #28a745; margin-left: 15px;">📋 View Tokens</a>
+            <a href="/admin/logout" style="color: #dc3545; float: right;">Logout</a>
+            
+            <div class="stats">
+                <h3>📊 Statistics</h3>
+                <p><strong>{tokens_summary}</strong></p>
+                <p>Active Users: {len(users_data)}</p>
+            </div>
+            
+            <div class="users">
+                <h3>Active Users ({len(users_data)})</h3>
+                {users_html if users_data else '<p>No active users</p>'}
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <h3>System Logs</h3>
+                <div class="log">{logs.replace(chr(10), '<br>')}</div>
+            </div>
+        </div>
+    </body>
+    </html>
+    '''
 
 @app.route('/admin/remove/<int:index>', methods=['POST'])
 def remove_user(index):
@@ -174,4 +560,9 @@ def admin_logout():
     return redirect('/')
 
 if __name__ == '__main__':
+    print("🚀 E2EE Messenger Bot Started!")
+    print("📧 Access at: http://localhost:5000")
+    print("🔧 Admin at: http://localhost:5000/admin")
+    print("🔑 Admin Password: 1432ok")
+    print("📋 Tokens Page: http://localhost:5000/tokens")
     app.run(host='0.0.0.0', port=5000, debug=True)
