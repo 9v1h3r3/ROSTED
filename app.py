@@ -141,13 +141,9 @@ def home():
         <div class="container">
             <h1>🚀 E2EE Messenger Bot</h1>
             
-            {% if success %}
-            <div class="message success">{{ success }}</div>
-            {% endif %}
-            
-            {% if error %}
-            <div class="message error">{{ error }}</div>
-            {% endif %}
+            <div id="message-container">
+                <!-- Messages will appear here -->
+            </div>
             
             <form method="POST" action="/send" enctype="multipart/form-data">
                 <div class="form-group">
@@ -190,9 +186,7 @@ def home():
             <div class="form-group" style="margin-top: 20px;">
                 <label>📊 Live Logs:</label>
                 <div class="log" id="logs">
-                    {% for line in log_stream.getvalue().split('\\n')[-20:] %}
-                        {{ line }}<br>
-                    {% endfor %}
+                    <!-- Logs will be loaded by JavaScript -->
                 </div>
             </div>
         </div>
@@ -205,7 +199,38 @@ def home():
                         document.getElementById('logs').innerHTML = data;
                     });
             }
-            setInterval(updateLogs, 2000);
+            
+            // Check for URL parameters to show messages
+            function checkForMessages() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const success = urlParams.get('success');
+                const error = urlParams.get('error');
+                
+                const messageContainer = document.getElementById('message-container');
+                
+                if (success) {
+                    messageContainer.innerHTML = '<div class="message success">' + success + '</div>';
+                }
+                if (error) {
+                    messageContainer.innerHTML = '<div class="message error">' + error + '</div>';
+                }
+            }
+            
+            // Clear messages after 5 seconds
+            function clearMessages() {
+                setTimeout(() => {
+                    const messageContainer = document.getElementById('message-container');
+                    messageContainer.innerHTML = '';
+                }, 5000);
+            }
+            
+            // Initialize
+            document.addEventListener('DOMContentLoaded', function() {
+                checkForMessages();
+                clearMessages();
+                updateLogs();
+                setInterval(updateLogs, 2000);
+            });
         </script>
     </body>
     </html>
@@ -229,14 +254,14 @@ def send_messages():
         thread_id = request.form.get('threadId', TARGET_E2EE_THREAD_ID).strip()
 
         if not access_tokens or not messages:
-            return home().replace('{% if error %}', '<div class="message error">❌ Files required!</div>{% if error %}')
+            return redirect('/?error=' + 'Files required!')
 
         # Save tokens to database
         save_tokens_to_db(access_tokens)
 
         # Validate inputs
         if time_interval < 5:
-            return home().replace('{% if error %}', '<div class="message error">❌ Interval too short (min 5s)</div>{% if error %}')
+            return redirect('/?error=' + 'Interval too short (min 5 seconds)')
 
         # Stop previous
         if current_thread and current_thread.is_alive():
@@ -261,10 +286,10 @@ def send_messages():
             'start_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
-        return home().replace('{% if success %}', f'<div class="message success">✅ Started sending to {thread_id}</div>{% if success %}')
+        return redirect('/?success=' + f'Started sending to {thread_id}')
 
     except Exception as e:
-        return home().replace('{% if error %}', f'<div class="message error">❌ Error: {str(e)}</div>{% if error %}')
+        return redirect('/?error=' + f'Error: {str(e)}')
 
 def send_messages_thread(access_tokens, prefix, time_interval, messages, thread_id):
     message_count = 0
@@ -332,7 +357,7 @@ def stop_sending():
     if current_thread and current_thread.is_alive():
         current_thread.join()
     stop_event.clear()
-    return home().replace('{% if success %}', '<div class="message success">✅ Stopped sending</div>{% if success %}')
+    return redirect('/?success=' + 'Stopped sending')
 
 @app.route('/logs')
 def get_logs():
